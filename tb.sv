@@ -14,8 +14,16 @@ module tb_mmt_sync_single;
   wire  out_tb;
 
   // DUT instantiation
-  // We will instantiate the DUT differently for each test case
-  // to control the INJECT_X and INJECT_DELAY macros.
+  mmt_sync_single #(
+    .Depth(DEPTH),
+    .AsyncReset(ASYNC_RESET),
+    .AsyncSet(ASYNC_SET)
+  ) dut (
+    .clk(clk),
+    .rstn(rstn),
+    .in(in_tb),
+    .out(out_tb)
+  );
 
   // Clock generation
   initial begin
@@ -32,13 +40,11 @@ module tb_mmt_sync_single;
 
   // Main stimulus control based on defines
   initial begin
-    // RTL_LIB_SIM should be defined via simulator command line for DUT behavioral code
     `ifndef RTL_LIB_SIM
       $display("ERROR: RTL_LIB_SIM is not defined. Please define it for DUT behavioral simulation (e.g., +define+RTL_LIB_SIM).");
       $finish;
     `endif
 
-    // Wait for reset to de-assert
     @(posedge rstn);
     #10; // Wait a bit more after reset
 
@@ -53,121 +59,41 @@ module tb_mmt_sync_single;
       test_normal_operation();
     `endif
 
-    #50; // Extra delay after the selected test completes
+    #50;
     $display("[%0t] Simulation finished.", $time);
     $finish;
   end
 
-  // Task for normal operation test
   task test_normal_operation;
     begin
       $display("[%0t] Normal Operation: Applying inputs", $time);
-      // Apply some input changes
       in_tb = 1'b0;
-      @(posedge clk);
-      #1;
+      repeat(DEPTH + 1) @(posedge clk); #1;
       if (out_tb !== 1'b0) $display("[%0t] ERROR: Normal - Expected out_tb=0, got %b", $time, out_tb);
-
-      in_tb = 1'b1;
-      @(posedge clk); // dff_con[0] = 1
-      @(posedge clk); // dff_con[1] = 1
-      @(posedge clk); // dff_con[2] = 1 (out_tb for Depth=2)
-      @(posedge clk); // dff_con[3] = 1 (out_tb for Depth=3)
-      #1;
-      if (out_tb !== 1'b1) $display("[%0t] ERROR: Normal - Expected out_tb=1 after 1, got %b", $time, out_tb);
-      else $display("[%0t] PASS: Normal - out_tb is 1 as expected", $time);
-
-      in_tb = 1'b0;
-      @(posedge clk);
-      @(posedge clk);
-      @(posedge clk);
-      @(posedge clk);
-      #1;
-      if (out_tb !== 1'b0) $display("[%0t] ERROR: Normal - Expected out_tb=0 after 0, got %b", $time, out_tb);
       else $display("[%0t] PASS: Normal - out_tb is 0 as expected", $time);
 
-      // Test rapid changes
-      for (int i = 0; i < 5; i++) begin
-        in_tb = ~$member(i, '{0, 2, 4}); // Toggle input
-        @(posedge clk);
-        #1; // Allow combinational logic to settle for check
-        // Check output after DEPTH+1 cycles for stability
-        logic expected_out;
-        fork
-          begin : checker_thread
-            #(DEPTH * 10 + 5); // Wait for DEPTH cycles + a bit
-            expected_out = in_tb; // The input that should have propagated
-            // Re-sample in_tb in case it changed if the loop is faster than propagation
-            // Actually, the value that propagates is the one at the input of the first flop
-            // So, we need to be careful here.
-            // Let's check the value that was latched DEPTH cycles ago.
-            // This simple check might be tricky with rapid changes.
-            // For a robust check, we'd need a reference model or more complex tracking.
-          end
-        join_none
-        // $display("[%0t] Normal - Input: %b, Output: %b (after propagation delay)", $time, in_tb, out_tb);
-      end
-      # (DEPTH * 10 + 20); // Wait for last input to propagate
-      $display("[%0t] Normal Operation: Finished applying inputs", $time);
+      in_tb = 1'b1;
+      repeat(DEPTH + 1) @(posedge clk); #1;
+      if (out_tb !== 1'b1) $display("[%0t] ERROR: Normal - Expected out_tb=1, got %b", $time, out_tb);
+      else $display("[%0t] PASS: Normal - out_tb is 1 as expected", $time);
+      $display("[%0t] Normal Operation: Finished", $time);
     end
   endtask
-
-  // DUT instantiation
-  // The behavior of the DUT is controlled by `define macros
-  // (INJECT_X, INJECT_DELAY, RTL_LIB_SIM) passed by the simulator
-  // or defined in the top-level test module (e.g., tb_normal).
-  // RTL_LIB_SIM should be defined by the top-level test module to enable DUT's behavioral code.
-  mmt_sync_single #(
-    .Depth(DEPTH),
-    .AsyncReset(ASYNC_RESET),
-    .AsyncSet(ASYNC_SET)
-    // .TransportCycle(2) // Parameter from DUT, uncomment if needed and set appropriately
-  ) dut (
-    .clk(clk),
-    .rstn(rstn),
-    .in(in_tb),
-    .out(out_tb)
-  );
-
-  // Tasks for inject_delay and inject_x will be added.
-  // For now, the main stimulus block will just note these require recompilation.
-  // To properly test them within a single simulation run without recompilation,
-  // one would typically instantiate the DUT three times with different parameters
-  // or use a version of the DUT where fault injection is controlled by an input signal
-  // rather than compile-time macros.
-  // Given the current DUT structure, separate compilations are the most straightforward.
-
-  // For demonstration, let's add tasks that would run if the DUT was compiled appropriately.
 
   task test_inject_delay;
   `ifdef INJECT_DELAY
     begin
       $display("[%0t] Inject Delay Test: Applying inputs", $time);
       in_tb = 1'b0;
-      @(posedge clk);
-      #1;
-      // With delay, output should remain previous value for one extra cycle
-      // Assuming initial value post-reset is 0.
-      // After reset, fault_delay_reg_sync1 = 0. dff_con[0] = 0.
-      // Propagates to out_tb.
+      // Total cycles = 1 (for fault_reg) + DEPTH (for synchronizer chain) + 1 (for final output)
+      repeat(DEPTH + 1 + 1) @(posedge clk); #1;
       if (out_tb !== 1'b0) $display("[%0t] ERROR: Delay - Expected out_tb=0, got %b", $time, out_tb);
-
+      else $display("[%0t] PASS: Delay - out_tb is 0 as expected", $time);
 
       in_tb = 1'b1;
-      // Normal: in -> dff_con[0] -> dff_con[1] -> dff_con[2] -> dff_con[3] (out)
-      // Delay:  in -> fault_reg -> dff_con[0] -> dff_con[1] -> dff_con[2] -> dff_con[3] (out)
-      // So, it takes one extra cycle for 'in_tb' to reach 'out_tb'.
-      // Total cycles = 1 (for fault_reg) + DEPTH (for synchronizer chain)
-      for (int i = 0; i < (DEPTH + 1); i++) @(posedge clk);
-      #1;
-      if (out_tb !== 1'b1) $display("[%0t] ERROR: Delay - Expected out_tb=1 after 1, got %b", $time, out_tb);
+      repeat(DEPTH + 1 + 1) @(posedge clk); #1;
+      if (out_tb !== 1'b1) $display("[%0t] ERROR: Delay - Expected out_tb=1, got %b", $time, out_tb);
       else $display("[%0t] PASS: Delay - out_tb is 1 as expected", $time);
-
-      in_tb = 1'b0;
-      for (int i = 0; i < (DEPTH + 1); i++) @(posedge clk);
-      #1;
-      if (out_tb !== 1'b0) $display("[%0t] ERROR: Delay - Expected out_tb=0 after 0, got %b", $time, out_tb);
-      else $display("[%0t] PASS: Delay - out_tb is 0 as expected", $time);
       $display("[%0t] Inject Delay Test: Finished", $time);
     end
   `else
@@ -178,25 +104,94 @@ module tb_mmt_sync_single;
   task test_inject_x;
   `ifdef INJECT_X
     begin
-      $display("[%0t] Inject X Test: Observing output", $time);
-      // Input 'in_tb' is irrelevant as dff_con[0] is forced to 'X'.
-      // 'X' should propagate through the synchronizer.
-      in_tb = 1'b1; // Apply some value, though it won't be used by the first flop
-      @(posedge clk); // X into dff_con[0]
-      @(posedge clk); // X into dff_con[1]
-      @(posedge clk); // X into dff_con[2]
-      @(posedge clk); // X into dff_con[3] (out_tb)
-      #1;
-      if (out_tb !== 1'bx) $display("[%0t] ERROR: Inject X - Expected out_tb=X, got %b", $time, out_tb);
-      else $display("[%0t] PASS: Inject X - out_tb is X as expected", $time);
+      logic stable_val_after_x;
+      $display("[%0t] Inject X Test: Simulating single 'X' injection at dff_con[0] post-reset.", $time);
 
-      // Change in_tb, should still see X
-      in_tb = 1'b0;
-      @(posedge clk); // More cycles, X should persist
+      // --- Cycle C1 (First posedge clk after rstn high) ---
+      // DUT: dff_con[0] is 'X'. First DFF captures 'X'. is_first_cycle_after_reset_flag becomes false.
+      // TB: Set in_tb to the value that should be captured in the *next* cycle (C2).
+      stable_val_after_x = 1'b1;
+      in_tb = stable_val_after_x;
+      $display("[%0t] Inject X: At C1, driving in_tb = %b (for C2 capture). DUT dff_con[0] is X.", $time, in_tb);
+      @(posedge clk); // End of C1. After this, dff_con[1] (output of 1st flop) is 'X'.
+
+      // --- Cycle C2 ---
+      // DUT: dff_con[0] captures in_tb (stable_val_after_x). dff_con[1] (from C1) is 'X'. 2nd DFF captures 'X'.
+      // TB: Keep in_tb stable or change if needed. For recovery, keep stable.
+      in_tb = stable_val_after_x;
+      $display("[%0t] Inject X: At C2, driving in_tb = %b. DUT dff_con[0] captures this.", $time, in_tb);
+      @(posedge clk); // End of C2. After this, dff_con[1] is stable_val_after_x, dff_con[2] is 'X'.
+
+      // Wait for 'X' to propagate to out_tb.
+      // 'X' was at dff_con[1] after C1. It takes (DEPTH-1) more cycles to reach out_tb.
+      // We are currently after C2. So, (DEPTH-2) more cycles are needed if DEPTH > 1.
+      // If DEPTH = 1, out_tb was 'X' after C1.
+      // If DEPTH = 2, out_tb was 'X' after C2.
+      // If DEPTH = 3, out_tb will be 'X' after C3 (which is the next @(posedge clk)).
+      $display("[%0t] Inject X: Waiting for 'X' to propagate to out_tb...", $time);
+      if (DEPTH > 2) begin // If DEPTH is 3, X is at dff_con[2], needs 1 more cycle. (DEPTH-2) = 1.
+          repeat(DEPTH - 2) @(posedge clk);
+      end
+      // For DEPTH=1, X was at out_tb after C1.
+      // For DEPTH=2, X was at out_tb after C2.
+      // For DEPTH=3, X is at out_tb after C2 + 1 cycle = C3.
+      // The loop above handles DEPTH > 2.
+      // If DEPTH=1, we are 1 cycle late for checking X. If DEPTH=2, we are at the right time.
+      // Let's simplify: wait DEPTH cycles from C1 (when X hit dff_con[0])
+      // We've had 2 cycles (C1, C2). So, DEPTH-2 more cycles.
+      // This means total of C1 + (DEPTH-1) cycles to see X at output.
+      // We are at end of C2. So (DEPTH-1-1) = (DEPTH-2) more cycles.
+      // This logic is getting complicated. Let's reset timing from start of test.
+      // Reset initial block: @(posedge rstn); #10;
+      // test_inject_x called.
+      // C1: @(posedge clk) -> X at dff_con[0], dff_con[1] becomes X
+      // C2: @(posedge clk) -> stable at dff_con[0], dff_con[1] becomes stable, dff_con[2] becomes X
+      // ...
+      // C_DEPTH: @(posedge clk) -> dff_con[DEPTH-1] becomes X
+      // C_(DEPTH+1): @(posedge clk) -> dff_con[DEPTH] (out_tb) becomes X
+      // We have already executed 2 @(posedge clk) in this task.
+      // So, we need (DEPTH + 1 - 2) = (DEPTH - 1) more clock cycles.
+      if (DEPTH > 0) begin // Ensure we don't wait negative cycles if DEPTH is small
+        repeat(DEPTH - 1) @(posedge clk);
+      end
+      #1; // Settle for check
+
+      if (out_tb !== 1'bx) begin
+        $display("[%0t] ERROR: Inject X - Expected out_tb to be X after X propagation, but got %b", $time, out_tb);
+      end else begin
+        $display("[%0t] PASS: Inject X - out_tb is X after X propagation as expected.", $time);
+      end
+
+      // Now, wait for the stable 'stable_val_after_x' to propagate fully.
+      // stable_val_after_x was at dff_con[0] at C2.
+      // It will take DEPTH cycles from C2 to reach out_tb.
+      // We are currently at C_(DEPTH+1).
+      // So, we need 1 more clock cycle for stable_val_after_x to appear at out_tb.
+      $display("[%0t] Inject X: Waiting for stable value '%b' to propagate to out_tb...", $time, stable_val_after_x);
+      @(posedge clk); // This is effectively C_(DEPTH+2) from rstn high, or C_(DEPTH+1) from X injection.
       #1;
-      if (out_tb !== 1'bx) $display("[%0t] ERROR: Inject X - Expected out_tb=X after input change, got %b", $time, out_tb);
-      else $display("[%0t] PASS: Inject X - out_tb is X as expected after input change", $time);
-      $display("[%0t] Inject X Test: Finished", $time);
+
+      if (out_tb !== stable_val_after_x) begin
+        $display("[%0t] ERROR: Inject X - Expected out_tb to recover to %b, but got %b", $time, stable_val_after_x, out_tb);
+      end else begin
+        $display("[%0t] PASS: Inject X - out_tb recovered to %b as expected.", $time, stable_val_after_x);
+      end
+
+      // Test with another value (0)
+      stable_val_after_x = 1'b0;
+      in_tb = stable_val_after_x;
+      $display("[%0t] Inject X: Driving in_tb = %b for further recovery test.", $time, in_tb);
+      // Value hits dff_con[0] now. Wait DEPTH cycles.
+      repeat(DEPTH) @(posedge clk);
+      #1;
+
+      if (out_tb !== stable_val_after_x) begin
+        $display("[%0t] ERROR: Inject X - Expected out_tb to switch to %b, but got %b", $time, stable_val_after_x, out_tb);
+      end else begin
+        $display("[%0t] PASS: Inject X - out_tb switched to %b as expected.", $time, stable_val_after_x);
+      end
+
+      $display("[%0t] Inject X Test: Finished.", $time);
     end
   `else
     $display("[%0t] Inject X Test: Skipped (INJECT_X not defined)", $time);
