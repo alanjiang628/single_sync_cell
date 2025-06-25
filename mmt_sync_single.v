@@ -3,7 +3,9 @@ module mmt_sync_single
        parameter Scannable = 1,
        parameter AsyncReset = 1,
        parameter AsyncSet = 0,
-       parameter TransportCycle =2)
+       parameter TransportCycle =2,
+       parameter ENABLE_INJECT_DELAY = 1 // New parameter to control delay injection
+    )
     ( input                 clk,
       input                 rstn,
       input                 in,
@@ -14,11 +16,12 @@ wire [Depth  : 0] dff_con;
 assign out = dff_con[Depth];
 
   // Step 1: Determine the base source for dff_con[0] if INJECT_X was NOT active.
-  // This source depends on whether INJECT_DELAY is active.
+  // This source depends on whether ENABLE_INJECT_DELAY is active.
   wire dff_con0_base_source;
   wire dff_con0_normal_source = in; // Input 'in'
 
-  `ifdef INJECT_DELAY
+  if (ENABLE_INJECT_DELAY == 1) begin : delay_logic_block
+    `ifdef INJECT_DELAY
     reg fault_delay_reg_sync1;
     assign dff_con0_base_source = fault_delay_reg_sync1;
 
@@ -44,9 +47,12 @@ assign out = dff_con[Depth];
         end
       end
     endgenerate
-  `else // INJECT_DELAY is not defined
+    `else
+    assign dff_con0_base_source = dff_con0_normal_source;
+    `endif // INJECT_DELAY
+  end else begin : no_delay_logic_block // ENABLE_INJECT_DELAY == 0
     assign dff_con0_base_source = dff_con0_normal_source; // i.e., 'in'
-  `endif // INJECT_DELAY
+  end
 
   // Step 2: Implement INJECT_RANDOM, INJECT_X logic or normal assignment for dff_con[0]
 
